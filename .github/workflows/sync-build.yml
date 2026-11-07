@@ -125,26 +125,14 @@ jobs:
           echo "value=$VERSION" >> "$GITHUB_OUTPUT"
           echo "上游版本号: $VERSION"
 
-      # ALIYUN_REGISTRY 支持两种写法：
-      #   registry.cn-hangzhou.aliyuncs.com/命名空间
-      #   registry.cn-hangzhou.aliyuncs.com  （此时用 ACR_NAMESPACE 默认值）
+      # host 固定用 ACR_HOST：ALIYUN_REGISTRY 里若填的是传统域名 registry.cn-hangzhou.aliyuncs.com，
+      # 那是老个人版入口，与 crpi-* 实例不是同一个 registry，会导致 docker login 401
       - name: Resolve ACR settings
         id: acrset
-        env:
-          ALI_REG: ${{ secrets.ALIYUN_REGISTRY }}
         run: |
-          ALI_HOST="${ALI_REG%%/*}"
-          if [ -z "$ALI_HOST" ]; then
-            ALI_HOST="${ACR_HOST}"
-          fi
-          if [ -n "$ALI_REG" ] && [ "$ALI_REG" != "$ALI_HOST" ]; then
-            ALI_NAMESPACE="${ALI_REG#*/}"
-          else
-            ALI_NAMESPACE="${ACR_NAMESPACE}"
-          fi
-          echo "host=${ALI_HOST}" >> "$GITHUB_OUTPUT"
-          echo "namespace=${ALI_NAMESPACE}" >> "$GITHUB_OUTPUT"
-          echo "ACR host=${ALI_HOST} namespace=${ALI_NAMESPACE} repo=${ACR_REPO}"
+          echo "host=${ACR_HOST}" >> "$GITHUB_OUTPUT"
+          echo "namespace=${ACR_NAMESPACE}" >> "$GITHUB_OUTPUT"
+          echo "ACR host=${ACR_HOST} namespace=${ACR_NAMESPACE} repo=${ACR_REPO}"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
