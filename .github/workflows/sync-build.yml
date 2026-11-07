@@ -37,6 +37,7 @@ jobs:
       changed: ${{ steps.compare.outputs.changed }}
       upstream_sha: ${{ steps.compare.outputs.upstream_sha }}
       hub: ${{ steps.compare.outputs.hub }}
+      acr: ${{ steps.compare.outputs.acr }}
     steps:
       - name: Checkout deploy repo
         uses: actions/checkout@v4
@@ -47,11 +48,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
           DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          ALI_REG: ${{ secrets.ALIYUN_REGISTRY }}
+          ALI_USER: ${{ secrets.ALIYUN_USERNAME }}
+          ALI_PASS: ${{ secrets.ALIYUN_PASSWORD }}
         run: |
           UPSTREAM_SHA=$(gh api "repos/${UPSTREAM_REPO}/commits/${UPSTREAM_BRANCH}" --jq '.sha')
           echo "upstream_sha=$UPSTREAM_SHA" >> "$GITHUB_OUTPUT"
 
-          # 指纹里带上 hub 状态：先只推 GHCR、之后补配 Docker Hub 时会自动再构建一次
+          # 指纹里带上推送通道状态：先只推 GHCR、之后补配 Docker Hub / ACR 时会自动再构建一次
           if [ -n "$DH_USER" ] && [ -n "$DH_TOKEN" ]; then
             HUB=hub
             echo "Docker Hub 凭据已配置，本次会推送 Docker Hub。"
@@ -61,8 +65,17 @@ jobs:
           fi
           echo "hub=$HUB" >> "$GITHUB_OUTPUT"
 
+          if [ -n "$ALI_REG" ] && [ -n "$ALI_USER" ] && [ -n "$ALI_PASS" ]; then
+            ACR=acr
+            echo "阿里云 ACR 凭据已配置，本次会推送 ACR。"
+          else
+            ACR=noacr
+            echo "未配置阿里云 ACR 凭据，跳过 ACR 推送。"
+          fi
+          echo "acr=$ACR" >> "$GITHUB_OUTPUT"
+
           LAST_LINE=$(tr -d '[:space:]' < last-build.txt 2>/dev/null || true)
-          WANT_FP="${UPSTREAM_SHA}${BUILD_REV}${HUB}"
+          WANT_FP="${UPSTREAM_SHA}${BUILD_REV}${HUB}${ACR}"
           echo "want_fp=$WANT_FP"
           echo "last_fp=${LAST_LINE:-<空>}"
 
@@ -113,15 +126,38 @@ jobs:
         id: tags
         env:
           DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          ALI_REG: ${{ secrets.ALIYUN_REGISTRY }}
+          ALI_NS: ${{ secrets.ALIYUN_NAMESPACE }}
         run: |
           SHA="${{ needs.check.outputs.upstream_sha }}"
           SHORT="${SHA:0:12}"
           VER="${{ steps.ver.outputs.value }}"
           TAGS="${IMAGE_NAME}:latest,${IMAGE_NAME}:armv7,${IMAGE_NAME}:sha-${SHORT}"
+
           if [ "${{ needs.check.outputs.hub }}" = "hub" ]; then
             DEST="docker.io/${DH_USER}/${DOCKERHUB_REPO}"
             TAGS="${TAGS},${DEST}:latest,${DEST}:armv7,${DEST}:${VER},${DEST}:sha-${SHORT}"
           fi
+
+          # ALIYUN_REGISTRY 支持两种写法：
+          #   registry.cn-hangzhou.aliyuncs.com/命名空间
+          #   registry.cn-hangzhou.aliyuncs.com  （此时需另配 ALIYUN_NAMESPACE）
+          if [ "${{ needs.check.outputs.acr }}" = "acr" ]; then
+            ALI_HOST="${ALI_REG%%/*}"
+            if [ "$ALI_REG" != "$ALI_HOST" ]; then
+              ALI_NAMESPACE="${ALI_REG#*/}"
+            else
+              ALI_NAMESPACE="${ALI_NS}"
+            fi
+            echo "ali_host=${ALI_HOST}" >> "$GITHUB_OUTPUT"
+            if [ -n "$ALI_NAMESPACE" ]; then
+              ACR_DEST="${ALI_HOST}/${ALI_NAMESPACE}/${DOCKERHUB_REPO}"
+              TAGS="${TAGS},${ACR_DEST}:latest,${ACR_DEST}:armv7,${ACR_DEST}:${VER},${ACR_DEST}:sha-${SHORT}"
+            else
+              echo "::warning::未能确定 ACR 命名空间：ALIYUN_REGISTRY 里没带 /命名空间，也没配 ALIYUN_NAMESPACE，本次跳过 ACR 推送。"
+            fi
+          fi
+
           echo "value=${TAGS}" >> "$GITHUB_OUTPUT"
           echo "推送目标: ${TAGS}"
 
@@ -145,6 +181,14 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Log in to Aliyun ACR
+        if: needs.check.outputs.acr == 'acr'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ steps.tags.outputs.ali_host }}
+          username: ${{ secrets.ALIYUN_USERNAME }}
+          password: ${{ secrets.ALIYUN_PASSWORD }}
+
       - name: Build and push (linux/arm/v7)
         uses: docker/build-push-action@v6
         with:
@@ -161,7 +205,7 @@ jobs:
             org.opencontainers.image.version=${{ steps.ver.outputs.value }}
 
       - name: Record built fingerprint
-        run: echo "${{ needs.check.outputs.upstream_sha }}${BUILD_REV}${{ needs.check.outputs.hub }}" > last-build.txt
+        run: echo "${{ needs.check.outputs.upstream_sha }}${BUILD_REV}${{ needs.check.outputs.hub }}${{ needs.check.outputs.acr }}" > last-build.txt
 
       - name: Commit last-build.txt
         run: |

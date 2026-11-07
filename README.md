@@ -19,6 +19,7 @@ no matching manifest for linux/arm/v7 in the manifest list entries
 | 通道 | 镜像 | 说明 |
 | --- | --- | --- |
 | Docker Hub（盒子实际拉取） | `<DOCKERHUB_USERNAME>/danmu-api:latest`<br>`:<版本号>` / `:armv7` / `:sha-<12位>` | 需配置 secrets |
+| 阿里云 ACR 个人版（国内最快） | `registry.<地域>.aliyuncs.com/<命名空间>/danmu-api:latest` | 需配置 3 个 secrets |
 | GHCR（备用） | `ghcr.io/viciy2023/danmu-api-deploy:latest` / `:armv7` / `:sha-<12位>` | 只需 GITHUB_TOKEN，包默认私有 |
 
 - 平台：**`linux/arm/v7`**（单架构，不做多架构，构建更快）
@@ -42,6 +43,17 @@ no matching manifest for linux/arm/v7 in the manifest list entries
    | `DOCKERHUB_TOKEN` | Docker Hub Access Token，权限选 **Read & Write** |
 
    Token 在 Docker Hub → Account settings → Security → New Access Token 生成。
+
+   **可选：阿里云 ACR 个人版**（国内拉取最快，盒子优先用它）
+
+   | Secret | 值 |
+   | --- | --- |
+   | `ALIYUN_REGISTRY` | `registry.cn-hangzhou.aliyuncs.com/你的命名空间`<br>或只填 `registry.cn-hangzhou.aliyuncs.com`，另配 `ALIYUN_NAMESPACE` |
+   | `ALIYUN_USERNAME` | **阿里云账号全名**（手机号或 `xxx@xxx.com`），不是昵称 |
+   | `ALIYUN_PASSWORD` | ACR「访问凭证」里设置的固定密码，不是登录密码 |
+   | `ALIYUN_NAMESPACE` | （可选）命名空间；`ALIYUN_REGISTRY` 已带 `/命名空间` 时不需要 |
+
+   三个 `ALIYUN_*` 齐备才会推 ACR，缺任何一个自动跳过，不影响其他通道。
 
 2. **Actions** → 左侧 `Sync & Build danmu-api (linux/arm/v7)` → **Run workflow**
    - 勾上 `force`，点 Run
