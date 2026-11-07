@@ -50,7 +50,11 @@ no matching manifest for linux/arm/v7 in the manifest list entries
    | --- | --- |
    | `ALIYUN_USERNAME` | **阿里云账号全名**，当前为 `<ALIYUN_USERNAME>` |
    | `ALIYUN_PASSWORD` | ACR「访问凭证」里设置的固定密码，不是登录密码 |
-   | `ALIYUN_REGISTRY` | 可留空，默认用 `<ALIYUN_REGISTRY>`；也可填 `host/命名空间` |
+   | `ALIYUN_REGISTRY` | **已废弃，不再读取**。host 固定写在工作流 env 的 `ACR_HOST` 里 |
+
+   ⚠️ 历史坑：`ALIYUN_REGISTRY` 曾填 `registry.cn-hangzhou.aliyuncs.com`（老个人版域名），
+   它会把 host 覆盖成另一个 registry，导致 `docker login` 一直 401——
+   尽管账号密码本身是对的。现在已改为固定使用 crpi 实例域名。
 
    产出地址固定为：
 
