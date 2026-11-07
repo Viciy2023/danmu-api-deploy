@@ -1,0 +1,177 @@
+name: Sync & Build danmu-api (linux/arm/v7)
+
+# 本仓库不保存上游源码：每次构建时从 huangxd-/danmu_api 直接 clone 最新代码，
+# 交叉构建 linux/arm/v7 镜像，推送两个 registry：
+#   ghcr.io/viciy2023/danmu-api-deploy   —— 备用通道，只需 GITHUB_TOKEN
+#   <DOCKERHUB_USERNAME>/danmu-api       —— 盒子实际拉取的那条，需配两个 secrets
+#
+# 上游 SHA + BUILD_REV + hub 状态 组成构建指纹，写进 last-build.txt，
+# 三者都没变化时跳过构建（armv7 在 QEMU 下构建很慢，去重很重要）。
+
+on:
+  schedule:
+    # 每天 UTC 18:00 = 北京 02:00
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "上游 SHA 未变化也强制重建（首次启用、补推 Docker Hub 时用）"
+        type: boolean
+        default: false
+
+env:
+  UPSTREAM_REPO: huangxd-/danmu_api
+  UPSTREAM_BRANCH: main
+  IMAGE_NAME: ghcr.io/viciy2023/danmu-api-deploy
+  # 完整镜像名 <DOCKERHUB_USERNAME>/<DOCKERHUB_REPO>
+  DOCKERHUB_REPO: danmu-api
+  # 改了构建策略（基础镜像、标签规则、缓存方式）就 +1，强制重建一次
+  BUILD_REV: v1
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      changed: ${{ steps.compare.outputs.changed }}
+      upstream_sha: ${{ steps.compare.outputs.upstream_sha }}
+      hub: ${{ steps.compare.outputs.hub }}
+    steps:
+      - name: Checkout deploy repo
+        uses: actions/checkout@v4
+
+      - name: Compare upstream SHA with last build
+        id: compare
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          UPSTREAM_SHA=$(gh api "repos/${UPSTREAM_REPO}/commits/${UPSTREAM_BRANCH}" --jq '.sha')
+          echo "upstream_sha=$UPSTREAM_SHA" >> "$GITHUB_OUTPUT"
+
+          # 指纹里带上 hub 状态：先只推 GHCR、之后补配 Docker Hub 时会自动再构建一次
+          if [ -n "$DH_USER" ] && [ -n "$DH_TOKEN" ]; then
+            HUB=hub
+            echo "Docker Hub 凭据已配置，本次会推送 Docker Hub。"
+          else
+            HUB=nohub
+            echo "未配置 Docker Hub 凭据，本次只推送 GHCR。"
+          fi
+          echo "hub=$HUB" >> "$GITHUB_OUTPUT"
+
+          LAST_LINE=$(tr -d '[:space:]' < last-build.txt 2>/dev/null || true)
+          WANT_FP="${UPSTREAM_SHA}${BUILD_REV}${HUB}"
+          echo "want_fp=$WANT_FP"
+          echo "last_fp=${LAST_LINE:-<空>}"
+
+          if [ "$WANT_FP" = "$LAST_LINE" ] && [ "${{ inputs.force }}" != "true" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "上游未变化，跳过构建。"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "检测到变化，开始构建。"
+          fi
+
+  build:
+    needs: check
+    if: needs.check.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Checkout deploy repo
+        uses: actions/checkout@v4
+
+      - name: Clone upstream source
+        run: |
+          git clone --depth 1 --branch "${UPSTREAM_BRANCH}" "https://github.com/${UPSTREAM_REPO}.git" upstream
+          echo "upstream HEAD: $(git -C upstream rev-parse HEAD)"
+
+      # node:24-alpine 起官方镜像不再提供 arm/v7（实测 24-alpine 只有 arm64/v8）。
+      # 这里强制锁定 node:22-alpine，防止上游升级基础镜像后 armv7 构建突然失败。
+      - name: Pin base image to node:22-alpine
+        run: |
+          echo "BEFORE:"; grep -E '^FROM ' upstream/Dockerfile
+          sed -i -E 's|^FROM node:[0-9]+(-alpine)?|FROM node:22-alpine|' upstream/Dockerfile
+          echo "AFTER:";  grep -E '^FROM ' upstream/Dockerfile
+
+      - name: Read version from upstream globals.js
+        id: ver
+        run: |
+          VERSION=$(grep "VERSION:" upstream/danmu_api/configs/globals.js | sed -E "s/.*VERSION: '(.*)'.*/\1/")
+          if [ -z "$VERSION" ]; then
+            echo "无法从上游 danmu_api/configs/globals.js 解析版本号"
+            exit 1
+          fi
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "上游版本号: $VERSION"
+
+      - name: Assemble push targets
+        id: tags
+        env:
+          DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          SHA="${{ needs.check.outputs.upstream_sha }}"
+          SHORT="${SHA:0:12}"
+          VER="${{ steps.ver.outputs.value }}"
+          TAGS="${IMAGE_NAME}:latest,${IMAGE_NAME}:armv7,${IMAGE_NAME}:sha-${SHORT}"
+          if [ "${{ needs.check.outputs.hub }}" = "hub" ]; then
+            DEST="docker.io/${DH_USER}/${DOCKERHUB_REPO}"
+            TAGS="${TAGS},${DEST}:latest,${DEST}:armv7,${DEST}:${VER},${DEST}:sha-${SHORT}"
+          fi
+          echo "value=${TAGS}" >> "$GITHUB_OUTPUT"
+          echo "推送目标: ${TAGS}"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        if: needs.check.outputs.hub == 'hub'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push (linux/arm/v7)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./upstream
+          platforms: linux/arm/v7
+          push: true
+          # 关掉 attestation，否则 manifest 里多出 unknown 架构，老版本 Docker 拉取可能报 no matching manifest
+          provenance: false
+          tags: ${{ steps.tags.outputs.value }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            org.opencontainers.image.source=https://github.com/huangxd-/danmu_api
+            org.opencontainers.image.version=${{ steps.ver.outputs.value }}
+
+      - name: Record built fingerprint
+        run: echo "${{ needs.check.outputs.upstream_sha }}${BUILD_REV}${{ needs.check.outputs.hub }}" > last-build.txt
+
+      - name: Commit last-build.txt
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add last-build.txt
+          if git diff --staged --quiet; then
+            echo "指纹未变化，无需提交。"
+          else
+            git commit -m "build: 上游 ${{ needs.check.outputs.upstream_sha }} 构建完成（armv7）"
+            git pull --rebase origin main
+            git push
+          fi
