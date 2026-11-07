@@ -167,6 +167,28 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # 凭据错误时只跳过 ACR，不能拖垮 Docker Hub / GHCR 的推送
+      - name: Diagnose ACR credentials (no secret values printed)
+        if: needs.check.outputs.acr == 'acr'
+        env:
+          ALI_U: ${{ secrets.ALIYUN_USERNAME }}
+          ALI_P: ${{ secrets.ALIYUN_PASSWORD }}
+          ALI_R: ${{ secrets.ALIYUN_REGISTRY }}
+        run: |
+          echo "ALIYUN_USERNAME 长度: ${#ALI_U}"
+          echo "ALIYUN_PASSWORD 长度: ${#ALI_P}"
+          echo "ALIYUN_REGISTRY 是否为空: $([ -z "$ALI_R" ] && echo 是 || echo 否)"
+          echo "解析出的 host: ${{ steps.acrset.outputs.host }}"
+          echo "解析出的 namespace: ${{ steps.acrset.outputs.namespace }}"
+          case "$ALI_P" in
+            [\ \	]*) echo "::warning::ALIYUN_PASSWORD 以空白字符开头，很可能是复制时带进来的";;
+          esac
+          case "$ALI_P" in
+            *[\ \	]) echo "::warning::ALIYUN_PASSWORD 以空白字符结尾，很可能是复制时带进来的";;
+          esac
+          if printf '%s' "$ALI_P" | grep -q $'\r'; then
+            echo "::warning::ALIYUN_PASSWORD 中含回车符（CRLF 残留）"
+          fi
+
       - name: Log in to Aliyun ACR
         id: acrlogin
         if: needs.check.outputs.acr == 'acr'
