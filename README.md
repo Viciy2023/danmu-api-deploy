@@ -48,12 +48,19 @@ no matching manifest for linux/arm/v7 in the manifest list entries
 
    | Secret | 值 |
    | --- | --- |
-   | `ALIYUN_REGISTRY` | `registry.cn-hangzhou.aliyuncs.com/你的命名空间`<br>或只填 `registry.cn-hangzhou.aliyuncs.com`，另配 `ALIYUN_NAMESPACE` |
-   | `ALIYUN_USERNAME` | **阿里云账号全名**（手机号或 `xxx@xxx.com`），不是昵称 |
+   | `ALIYUN_USERNAME` | **阿里云账号全名**，当前为 `<ALIYUN_USERNAME>` |
    | `ALIYUN_PASSWORD` | ACR「访问凭证」里设置的固定密码，不是登录密码 |
-   | `ALIYUN_NAMESPACE` | （可选）命名空间；`ALIYUN_REGISTRY` 已带 `/命名空间` 时不需要 |
+   | `ALIYUN_REGISTRY` | 可留空，默认用 `<ALIYUN_REGISTRY>`；也可填 `host/命名空间` |
 
-   三个 `ALIYUN_*` 齐备才会推 ACR，缺任何一个自动跳过，不影响其他通道。
+   产出地址固定为：
+
+   ```
+   <ALIYUN_REGISTRY>/<ALIYUN_NAMESPACE>/danmu-api-deploy:<标签>
+   ```
+
+   ⚠️ ACR **不会自动建仓库**，必须先在控制台建好命名空间 `<ALIYUN_NAMESPACE>` 和仓库 `danmu-api-deploy`，否则推送会报 `name unknown`。
+
+   两个 `ALIYUN_*` 凭据齐备才会推 ACR，缺任何一个自动跳过，不影响其他通道。
 
 2. **Actions** → 左侧 `Sync & Build danmu-api (linux/arm/v7)` → **Run workflow**
    - 勾上 `force`，点 Run

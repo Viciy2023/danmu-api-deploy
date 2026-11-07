@@ -25,6 +25,10 @@ env:
   IMAGE_NAME: ghcr.io/viciy2023/danmu-api-deploy
   # 完整镜像名 <DOCKERHUB_USERNAME>/<DOCKERHUB_REPO>
   DOCKERHUB_REPO: danmu-api
+  # 阿里云 ACR 个人版：这些是公开标识，不是密钥；ALIYUN_REGISTRY secret 只用来覆盖 host
+  ACR_HOST: <ALIYUN_REGISTRY>
+  ACR_NAMESPACE: <ALIYUN_NAMESPACE>
+  ACR_REPO: danmu-api-deploy
   # 改了构建策略（基础镜像、标签规则、缓存方式）就 +1，强制重建一次
   BUILD_REV: v1
 
@@ -65,7 +69,7 @@ jobs:
           fi
           echo "hub=$HUB" >> "$GITHUB_OUTPUT"
 
-          if [ -n "$ALI_REG" ] && [ -n "$ALI_USER" ] && [ -n "$ALI_PASS" ]; then
+          if [ -n "$ALI_USER" ] && [ -n "$ALI_PASS" ]; then
             ACR=acr
             echo "阿里云 ACR 凭据已配置，本次会推送 ACR。"
           else
@@ -143,15 +147,19 @@ jobs:
           #   registry.cn-hangzhou.aliyuncs.com/命名空间
           #   registry.cn-hangzhou.aliyuncs.com  （此时需另配 ALIYUN_NAMESPACE）
           if [ "${{ needs.check.outputs.acr }}" = "acr" ]; then
+            # ALIYUN_REGISTRY 可写成 host 或 host/命名空间；留空则用 ACR_HOST 默认值
             ALI_HOST="${ALI_REG%%/*}"
-            if [ "$ALI_REG" != "$ALI_HOST" ]; then
+            if [ -z "$ALI_HOST" ]; then
+              ALI_HOST="${ACR_HOST}"
+            fi
+            if [ "$ALI_REG" != "$ALI_HOST" ] && [ -n "$ALI_REG" ]; then
               ALI_NAMESPACE="${ALI_REG#*/}"
             else
-              ALI_NAMESPACE="${ALI_NS}"
+              ALI_NAMESPACE="${ALI_NS:-$ACR_NAMESPACE}"
             fi
             echo "ali_host=${ALI_HOST}" >> "$GITHUB_OUTPUT"
             if [ -n "$ALI_NAMESPACE" ]; then
-              ACR_DEST="${ALI_HOST}/${ALI_NAMESPACE}/${DOCKERHUB_REPO}"
+              ACR_DEST="${ALI_HOST}/${ALI_NAMESPACE}/${ACR_REPO}"
               TAGS="${TAGS},${ACR_DEST}:latest,${ACR_DEST}:armv7,${ACR_DEST}:${VER},${ACR_DEST}:sha-${SHORT}"
             else
               echo "::warning::未能确定 ACR 命名空间：ALIYUN_REGISTRY 里没带 /命名空间，也没配 ALIYUN_NAMESPACE，本次跳过 ACR 推送。"
