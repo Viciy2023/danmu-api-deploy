@@ -101,7 +101,7 @@ jobs:
       - name: Read version from upstream globals.js
         id: ver
         run: |
-          VERSION=$(grep "VERSION:" upstream/danmu_api/configs/globals.js | sed -E "s/.*VERSION: '(.*)'.*/\1/")
+          VERSION=$(grep -m1 "VERSION:" upstream/danmu_api/configs/globals.js | sed -E "s/.*VERSION: '(.*)'.*/\1/")
           if [ -z "$VERSION" ]; then
             echo "无法从上游 danmu_api/configs/globals.js 解析版本号"
             exit 1
