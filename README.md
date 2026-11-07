@@ -137,6 +137,7 @@ docker compose pull && docker compose up -d
 | 构建不可复现 | 上游 `.gitignore` 明确忽略 `package-lock.json`，每次 `npm install` 都重新解析版本。若某天构建突然失败，先用同一 SHA 手动重跑一次确认是否依赖漂移。 |
 | 60 天无提交会停用定时任务 | GitHub 官方行为。每次成功构建都会 commit `last-build.txt`，只要上游持续更新就不会触发；上游长期停更时需手动 Run workflow。 |
 | Docker Hub 国内连通性 | 盒子在国内直连 `registry-1.docker.io` 常常超时，必要时配镜像加速或改用 GHCR / 阿里云 ACR。 |
+| ACR 登录失败不阻塞 | `Log in to Aliyun ACR` 设了 `continue-on-error`，凭据错误只会跳过 ACR 并产生一条 warning，Docker Hub / GHCR 照常推送。排查时看该步骤的 annotation。 |
 
 ## 构建策略备注
 

@@ -1,12 +1,13 @@
 name: Sync & Build danmu-api (linux/arm/v7)
 
 # 本仓库不保存上游源码：每次构建时从 huangxd-/danmu_api 直接 clone 最新代码，
-# 交叉构建 linux/arm/v7 镜像，推送两个 registry：
+# 交叉构建 linux/arm/v7 镜像，推送三个 registry：
 #   ghcr.io/viciy2023/danmu-api-deploy   —— 备用通道，只需 GITHUB_TOKEN
-#   <DOCKERHUB_USERNAME>/danmu-api       —— 盒子实际拉取的那条，需配两个 secrets
+#   <DOCKERHUB_USERNAME>/danmu-api       —— 需配 DOCKERHUB_* secrets
+#   <ACR_HOST>/<ACR_NAMESPACE>/danmu-api-deploy —— 阿里云 ACR 个人版，国内最快
 #
-# 上游 SHA + BUILD_REV + hub 状态 组成构建指纹，写进 last-build.txt，
-# 三者都没变化时跳过构建（armv7 在 QEMU 下构建很慢，去重很重要）。
+# 任一口令通道凭据缺失或登录失败，只跳过该通道，不影响其他通道。
+# 上游 SHA + BUILD_REV + 通道状态 组成构建指纹写入 last-build.txt，无变化时跳过构建。
 
 on:
   schedule:
@@ -15,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       force:
-        description: "上游 SHA 未变化也强制重建（首次启用、补推 Docker Hub 时用）"
+        description: "上游 SHA 未变化也强制重建（首次启用、补推某个 registry 时用）"
         type: boolean
         default: false
 
@@ -25,7 +26,7 @@ env:
   IMAGE_NAME: ghcr.io/viciy2023/danmu-api-deploy
   # 完整镜像名 <DOCKERHUB_USERNAME>/<DOCKERHUB_REPO>
   DOCKERHUB_REPO: danmu-api
-  # 阿里云 ACR 个人版：这些是公开标识，不是密钥；ALIYUN_REGISTRY secret 只用来覆盖 host
+  # 阿里云 ACR 个人版：这些是公开标识，不是密钥；ALIYUN_REGISTRY secret 可覆盖 host
   ACR_HOST: <ALIYUN_REGISTRY>
   ACR_NAMESPACE: <ALIYUN_NAMESPACE>
   ACR_REPO: danmu-api-deploy
@@ -52,29 +53,27 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
           DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-          ALI_REG: ${{ secrets.ALIYUN_REGISTRY }}
           ALI_USER: ${{ secrets.ALIYUN_USERNAME }}
           ALI_PASS: ${{ secrets.ALIYUN_PASSWORD }}
         run: |
           UPSTREAM_SHA=$(gh api "repos/${UPSTREAM_REPO}/commits/${UPSTREAM_BRANCH}" --jq '.sha')
           echo "upstream_sha=$UPSTREAM_SHA" >> "$GITHUB_OUTPUT"
 
-          # 指纹里带上推送通道状态：先只推 GHCR、之后补配 Docker Hub / ACR 时会自动再构建一次
           if [ -n "$DH_USER" ] && [ -n "$DH_TOKEN" ]; then
             HUB=hub
-            echo "Docker Hub 凭据已配置，本次会推送 Docker Hub。"
+            echo "Docker Hub 凭据已配置，本次会尝试推送 Docker Hub。"
           else
             HUB=nohub
-            echo "未配置 Docker Hub 凭据，本次只推送 GHCR。"
+            echo "未配置 Docker Hub 凭据，跳过 Docker Hub。"
           fi
           echo "hub=$HUB" >> "$GITHUB_OUTPUT"
 
           if [ -n "$ALI_USER" ] && [ -n "$ALI_PASS" ]; then
             ACR=acr
-            echo "阿里云 ACR 凭据已配置，本次会推送 ACR。"
+            echo "阿里云 ACR 凭据已配置，本次会尝试推送 ACR。"
           else
             ACR=noacr
-            echo "未配置阿里云 ACR 凭据，跳过 ACR 推送。"
+            echo "未配置阿里云 ACR 凭据，跳过 ACR。"
           fi
           echo "acr=$ACR" >> "$GITHUB_OUTPUT"
 
@@ -126,48 +125,26 @@ jobs:
           echo "value=$VERSION" >> "$GITHUB_OUTPUT"
           echo "上游版本号: $VERSION"
 
-      - name: Assemble push targets
-        id: tags
+      # ALIYUN_REGISTRY 支持两种写法：
+      #   registry.cn-hangzhou.aliyuncs.com/命名空间
+      #   registry.cn-hangzhou.aliyuncs.com  （此时用 ACR_NAMESPACE 默认值）
+      - name: Resolve ACR settings
+        id: acrset
         env:
-          DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
           ALI_REG: ${{ secrets.ALIYUN_REGISTRY }}
-          ALI_NS: ${{ secrets.ALIYUN_NAMESPACE }}
         run: |
-          SHA="${{ needs.check.outputs.upstream_sha }}"
-          SHORT="${SHA:0:12}"
-          VER="${{ steps.ver.outputs.value }}"
-          TAGS="${IMAGE_NAME}:latest,${IMAGE_NAME}:armv7,${IMAGE_NAME}:sha-${SHORT}"
-
-          if [ "${{ needs.check.outputs.hub }}" = "hub" ]; then
-            DEST="docker.io/${DH_USER}/${DOCKERHUB_REPO}"
-            TAGS="${TAGS},${DEST}:latest,${DEST}:armv7,${DEST}:${VER},${DEST}:sha-${SHORT}"
+          ALI_HOST="${ALI_REG%%/*}"
+          if [ -z "$ALI_HOST" ]; then
+            ALI_HOST="${ACR_HOST}"
           fi
-
-          # ALIYUN_REGISTRY 支持两种写法：
-          #   registry.cn-hangzhou.aliyuncs.com/命名空间
-          #   registry.cn-hangzhou.aliyuncs.com  （此时需另配 ALIYUN_NAMESPACE）
-          if [ "${{ needs.check.outputs.acr }}" = "acr" ]; then
-            # ALIYUN_REGISTRY 可写成 host 或 host/命名空间；留空则用 ACR_HOST 默认值
-            ALI_HOST="${ALI_REG%%/*}"
-            if [ -z "$ALI_HOST" ]; then
-              ALI_HOST="${ACR_HOST}"
-            fi
-            if [ "$ALI_REG" != "$ALI_HOST" ] && [ -n "$ALI_REG" ]; then
-              ALI_NAMESPACE="${ALI_REG#*/}"
-            else
-              ALI_NAMESPACE="${ALI_NS:-$ACR_NAMESPACE}"
-            fi
-            echo "ali_host=${ALI_HOST}" >> "$GITHUB_OUTPUT"
-            if [ -n "$ALI_NAMESPACE" ]; then
-              ACR_DEST="${ALI_HOST}/${ALI_NAMESPACE}/${ACR_REPO}"
-              TAGS="${TAGS},${ACR_DEST}:latest,${ACR_DEST}:armv7,${ACR_DEST}:${VER},${ACR_DEST}:sha-${SHORT}"
-            else
-              echo "::warning::未能确定 ACR 命名空间：ALIYUN_REGISTRY 里没带 /命名空间，也没配 ALIYUN_NAMESPACE，本次跳过 ACR 推送。"
-            fi
+          if [ -n "$ALI_REG" ] && [ "$ALI_REG" != "$ALI_HOST" ]; then
+            ALI_NAMESPACE="${ALI_REG#*/}"
+          else
+            ALI_NAMESPACE="${ACR_NAMESPACE}"
           fi
-
-          echo "value=${TAGS}" >> "$GITHUB_OUTPUT"
-          echo "推送目标: ${TAGS}"
+          echo "host=${ALI_HOST}" >> "$GITHUB_OUTPUT"
+          echo "namespace=${ALI_NAMESPACE}" >> "$GITHUB_OUTPUT"
+          echo "ACR host=${ALI_HOST} namespace=${ALI_NAMESPACE} repo=${ACR_REPO}"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -189,13 +166,41 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # 凭据错误时只跳过 ACR，不能拖垮 Docker Hub / GHCR 的推送
       - name: Log in to Aliyun ACR
+        id: acrlogin
         if: needs.check.outputs.acr == 'acr'
+        continue-on-error: true
         uses: docker/login-action@v3
         with:
-          registry: ${{ steps.tags.outputs.ali_host }}
+          registry: ${{ steps.acrset.outputs.host }}
           username: ${{ secrets.ALIYUN_USERNAME }}
           password: ${{ secrets.ALIYUN_PASSWORD }}
+
+      - name: Assemble push targets
+        id: tags
+        env:
+          DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          SHA="${{ needs.check.outputs.upstream_sha }}"
+          SHORT="${SHA:0:12}"
+          VER="${{ steps.ver.outputs.value }}"
+          TAGS="${IMAGE_NAME}:latest,${IMAGE_NAME}:armv7,${IMAGE_NAME}:sha-${SHORT}"
+
+          if [ "${{ needs.check.outputs.hub }}" = "hub" ]; then
+            DEST="docker.io/${DH_USER}/${DOCKERHUB_REPO}"
+            TAGS="${TAGS},${DEST}:latest,${DEST}:armv7,${DEST}:${VER},${DEST}:sha-${SHORT}"
+          fi
+
+          if [ "${{ steps.acrlogin.outcome }}" = "success" ]; then
+            ACR_DEST="${{ steps.acrset.outputs.host }}/${{ steps.acrset.outputs.namespace }}/${ACR_REPO}"
+            TAGS="${TAGS},${ACR_DEST}:latest,${ACR_DEST}:armv7,${ACR_DEST}:${VER},${ACR_DEST}:sha-${SHORT}"
+          elif [ "${{ needs.check.outputs.acr }}" = "acr" ]; then
+            echo "::warning::阿里云 ACR 登录失败，本次跳过 ACR 推送，仅推送 GHCR / Docker Hub。请检查 ALIYUN_USERNAME / ALIYUN_PASSWORD。"
+          fi
+
+          echo "value=${TAGS}" >> "$GITHUB_OUTPUT"
+          echo "推送目标: ${TAGS}"
 
       - name: Build and push (linux/arm/v7)
         uses: docker/build-push-action@v6
