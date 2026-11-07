@@ -189,6 +189,27 @@ jobs:
             echo "::warning::ALIYUN_PASSWORD 中含回车符（CRLF 残留）"
           fi
 
+          # 绕过 docker login 的笼统报错，直接问 ACR 的 token 端点：凭据本身到底收不收
+          HOST="${{ steps.acrset.outputs.host }}"
+          NS="${{ steps.acrset.outputs.namespace }}"
+          SCOPE="repository:${NS}/${ACR_REPO}:pull,push"
+          CHALLENGE=$(curl -s -D - -o /dev/null "https://${HOST}/v2/" | grep -i '^www-authenticate' | tr -d '\r')
+          REALM=$(printf '%s' "$CHALLENGE" | sed -n 's/.*realm="\([^"]*\)".*/\1/p')
+          SERVICE=$(printf '%s' "$CHALLENGE" | sed -n 's/.*service="\([^"]*\)".*/\1/p')
+          echo "token 端点: ${REALM:-<未解析到>}"
+          if [ -n "$REALM" ]; then
+            CODE=$(curl -s -o /tmp/acr_auth.json -w '%{http_code}' -u "${ALI_U}:${ALI_P}" \
+              "${REALM}?service=${SERVICE}&scope=${SCOPE}")
+            echo "token 端点 HTTP: ${CODE}"
+            if grep -q '"token"' /tmp/acr_auth.json 2>/dev/null; then
+              echo "结论: 凭据有效，ACR 已签发 token（问题在 docker login 环节，不在密码）"
+            else
+              echo "结论: 凭据被拒，ACR 返回如下（不含密钥）："
+              head -c 300 /tmp/acr_auth.json
+              echo
+            fi
+          fi
+
       - name: Log in to Aliyun ACR
         id: acrlogin
         if: needs.check.outputs.acr == 'acr'
