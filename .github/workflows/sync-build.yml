@@ -26,9 +26,8 @@ env:
   IMAGE_NAME: ghcr.io/viciy2023/danmu-api-deploy
   # 完整镜像名 <DOCKERHUB_USERNAME>/<DOCKERHUB_REPO>
   DOCKERHUB_REPO: danmu-api
-  # 阿里云 ACR 个人版：这些是公开标识，不是密钥；ALIYUN_REGISTRY secret 可覆盖 host
-  ACR_HOST: <ALIYUN_REGISTRY>
-  ACR_NAMESPACE: <ALIYUN_NAMESPACE>
+  # 阿里云 ACR 个人版：host 与命名空间每个人不同，放在仓库 Secrets 里，不要写进公开仓库
+  # 例如：<实例前缀>.cn-guangzhou.personal.cr.aliyuncs.com / <命名空间>
   ACR_REPO: danmu-api-deploy
   # 改了构建策略（基础镜像、标签规则、缓存方式）就 +1，强制重建一次
   BUILD_REV: v1
@@ -55,6 +54,8 @@ jobs:
           DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           ALI_USER: ${{ secrets.ALIYUN_USERNAME }}
           ALI_PASS: ${{ secrets.ALIYUN_PASSWORD }}
+          ALI_HOST: ${{ secrets.ALIYUN_REGISTRY }}
+          ALI_NS: ${{ secrets.ALIYUN_NAMESPACE }}
         run: |
           UPSTREAM_SHA=$(gh api "repos/${UPSTREAM_REPO}/commits/${UPSTREAM_BRANCH}" --jq '.sha')
           echo "upstream_sha=$UPSTREAM_SHA" >> "$GITHUB_OUTPUT"
@@ -68,12 +69,12 @@ jobs:
           fi
           echo "hub=$HUB" >> "$GITHUB_OUTPUT"
 
-          if [ -n "$ALI_USER" ] && [ -n "$ALI_PASS" ]; then
+          if [ -n "$ALI_USER" ] && [ -n "$ALI_PASS" ] && [ -n "$ALI_HOST" ] && [ -n "$ALI_NS" ]; then
             ACR=acr
             echo "阿里云 ACR 凭据已配置，本次会尝试推送 ACR。"
           else
             ACR=noacr
-            echo "未配置阿里云 ACR 凭据，跳过 ACR。"
+            echo "未配置完整的阿里云 ACR 凭据（USERNAME/PASSWORD/REGISTRY/NAMESPACE），跳过 ACR。"
           fi
           echo "acr=$ACR" >> "$GITHUB_OUTPUT"
 
@@ -94,6 +95,10 @@ jobs:
     needs: check
     if: needs.check.outputs.changed == 'true'
     runs-on: ubuntu-latest
+    env:
+      # 从 Secrets 读取，避免把实例域名/命名空间写进公开仓库
+      ACR_HOST: ${{ secrets.ALIYUN_REGISTRY }}
+      ACR_NAMESPACE: ${{ secrets.ALIYUN_NAMESPACE }}
     permissions:
       contents: write
       packages: write
@@ -125,8 +130,7 @@ jobs:
           echo "value=$VERSION" >> "$GITHUB_OUTPUT"
           echo "上游版本号: $VERSION"
 
-      # host 固定用 ACR_HOST：ALIYUN_REGISTRY 里若填的是传统域名 registry.cn-hangzhou.aliyuncs.com，
-      # 那是老个人版入口，与 crpi-* 实例不是同一个 registry，会导致 docker login 401
+      # ACR_HOST / ACR_NAMESPACE 来自仓库 Secrets（ALIYUN_REGISTRY / ALIYUN_NAMESPACE）
       - name: Resolve ACR settings
         id: acrset
         run: |

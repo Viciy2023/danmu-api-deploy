@@ -10,6 +10,14 @@ no matching manifest for linux/arm/v7 in the manifest list entries
 
 本仓库补上这个缺口。
 
+## 效果预览
+
+盒子端接入本镜像后的实际效果（客户端：OneFilm）：
+
+![播放器弹幕效果](docs/images/danmaku-preview.jpg)
+
+![影片详情页](docs/images/detail-page.jpg)
+
 ## 本仓库不存源码
 
 只有 GitHub Actions 工作流和构建指纹 `last-build.txt`。每次构建时从上游 `git clone --depth 1` 取最新代码，构建完即弃。
@@ -48,23 +56,20 @@ no matching manifest for linux/arm/v7 in the manifest list entries
 
    | Secret | 值 |
    | --- | --- |
-   | `ALIYUN_USERNAME` | **阿里云账号全名**，当前为 `<ALIYUN_USERNAME>` |
+   | `ALIYUN_USERNAME` | 你的阿里云账号全名 |
    | `ALIYUN_PASSWORD` | ACR「访问凭证」里设置的固定密码，不是登录密码 |
-   | `ALIYUN_REGISTRY` | **已废弃，不再读取**。host 固定写在工作流 env 的 `ACR_HOST` 里 |
+   | `ALIYUN_REGISTRY` | ACR 实例域名，形如 `<实例前缀>.cn-guangzhou.personal.cr.aliyuncs.com` |
+   | `ALIYUN_NAMESPACE` | ACR 命名空间，需先在控制台创建 |
 
-   ⚠️ 历史坑：`ALIYUN_REGISTRY` 曾填 `registry.cn-hangzhou.aliyuncs.com`（老个人版域名），
-   它会把 host 覆盖成另一个 registry，导致 `docker login` 一直 401——
-   尽管账号密码本身是对的。现在已改为固定使用 crpi 实例域名。
-
-   产出地址固定为：
+   产出地址：
 
    ```
    <ALIYUN_REGISTRY>/<ALIYUN_NAMESPACE>/danmu-api-deploy:<标签>
    ```
 
-   ⚠️ ACR **不会自动建仓库**，必须先在控制台建好命名空间 `<ALIYUN_NAMESPACE>` 和仓库 `danmu-api-deploy`，否则推送会报 `name unknown`。
+   ⚠️ ACR **不会自动建仓库**，必须先在控制台建好命名空间和仓库 `danmu-api-deploy`，否则推送会报 `name unknown`。
 
-   两个 `ALIYUN_*` 凭据齐备才会推 ACR，缺任何一个自动跳过，不影响其他通道。
+   四个 `ALIYUN_*` 凭据齐备才会推 ACR，缺任何一个自动跳过，不影响其他通道。
 
 2. **Actions** → 左侧 `Sync & Build danmu-api (linux/arm/v7)` → **Run workflow**
    - 勾上 `force`，点 Run
